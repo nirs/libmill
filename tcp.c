@@ -1,4 +1,4 @@
-    /*
+/*
 
   Copyright (c) 2015 Martin Sustrik
 
@@ -34,31 +34,12 @@
 #include <unistd.h>
 
 #include "libmill.h"
+#include "net.h"
 #include "utils.h"
 
 #define MILL_TCP_LISTEN_BACKLOG 10
 
 #define MILL_TCP_BUFLEN 1500
-	
-static void mill_tunesock(int s) {
-    /* Make the socket non-blocking. */
-    int opt = fcntl(s, F_GETFL, 0);
-    if (opt == -1)
-        opt = 0;
-    int rc = fcntl(s, F_SETFL, opt | O_NONBLOCK);
-    mill_assert(rc != -1);
-    /*  Allow re-using the same local address rapidly. */
-    opt = 1;
-    rc = setsockopt(s, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof (opt));
-    mill_assert(rc == 0);
-    /* If possible, prevent SIGPIPE signal when writing to the connection
-        already closed by the peer. */
-#ifdef SO_NOSIGPIPE
-    opt = 1;
-    rc = setsockopt (s, SOL_SOCKET, SO_NOSIGPIPE, &opt, sizeof (opt));
-    mill_assert (rc == 0 || errno == EINVAL);
-#endif
-}
 
 enum mill_tcptype {
    MILL_TCPLISTENER,
@@ -84,6 +65,26 @@ struct mill_tcpconn {
     char ibuf[MILL_TCP_BUFLEN];
     char obuf[MILL_TCP_BUFLEN];
 };
+
+static void mill_tcptune(int s) {
+    /* Make the socket non-blocking. */
+    int opt = fcntl(s, F_GETFL, 0);
+    if (opt == -1)
+        opt = 0;
+    int rc = fcntl(s, F_SETFL, opt | O_NONBLOCK);
+    mill_assert(rc != -1);
+    /*  Allow re-using the same local address rapidly. */
+    opt = 1;
+    rc = setsockopt(s, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof (opt));
+    mill_assert(rc == 0);
+    /* If possible, prevent SIGPIPE signal when writing to the connection
+        already closed by the peer. */
+#ifdef SO_NOSIGPIPE
+    opt = 1;
+    rc = setsockopt (s, SOL_SOCKET, SO_NOSIGPIPE, &opt, sizeof (opt));
+    mill_assert (rc == 0 || errno == EINVAL);
+#endif
+}
 
 static struct mill_tcpconn *tcpconn_create(int fd) {
     struct mill_tcpconn *conn = malloc(sizeof(struct mill_tcpconn));
@@ -159,7 +160,7 @@ tcpsock tcplisten(const char *addr, int port) {
     int s = socket(ss.ss_family, SOCK_STREAM, 0);
     if(s == -1)
         return NULL;
-    mill_tunesock(s);
+    mill_tcptune(s);
 
     /* Start listening. */
     rc = bind(s, (struct sockaddr*)&ss, len);
@@ -213,7 +214,7 @@ tcpsock tcpaccept(tcpsock s, int64_t deadline) {
         /* Try to get new connection (non-blocking). */
         int as = accept(l->fd, NULL, NULL);
         if (as >= 0) {
-            mill_tunesock(as);
+            mill_tcptune(as);
             errno = 0;
             return &tcpconn_create(as)->sock;
         }
@@ -241,7 +242,7 @@ tcpsock tcpconnect(const char *addr, int port, int64_t deadline) {
     int s = socket(ss.ss_family, SOCK_STREAM, 0);
     if(s == -1)
         return NULL;
-    mill_tunesock(s);
+    mill_tcptune(s);
 
     /* Connect to the remote endpoint. */
     rc = connect(s, (struct sockaddr*)&ss, len);
