@@ -61,6 +61,7 @@ int mill_suspend(void) {
 }
 
 void mill_resume(struct mill_cr *cr, int result) {
+    mill_trace(NULL, "{%d} resume (result=%d)", (int)cr->debug.id, result);
     cr->result = result;
     cr->state = MILL_READY;
     mill_slist_push_back(&mill_ready, &cr->u_ready.item);
