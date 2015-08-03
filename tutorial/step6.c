@@ -24,32 +24,40 @@
 
 #include "../libmill.h"
 
+#include <assert.h>
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <unistd.h>
 
 #define CONN_ESTABLISHED 1
 #define CONN_SUCCEEDED 2
 #define CONN_FAILED 3
 
-void statistics(chan ch) {
-    int connections = 0;
-    int active = 0;
-    int failed = 0;
-    
+struct child_stats {
+    pid_t pid;
+    int connections;
+    int active;
+    int failed;
+};
+
+void statistics(chan ch, ipaddr addr) {
+    struct child_stats stats = {0};
+    stats.pid = getpid();
+    udpsock sock = udplisten(iplocal(NULL, 0, 0));
+
     while(1) {
         int op = chr(ch, int);
 
         if(op == CONN_ESTABLISHED)
-            ++connections, ++active;
+            ++stats.connections, ++stats.active;
         else
-            --active;
+            --stats.active;
         if(op == CONN_FAILED)
-            ++failed;
+            ++stats.failed;
 
-        printf("Total number of connections: %d\n", connections);
-        printf("Active connections: %d\n", active);
-        printf("Failed connections: %d\n\n", failed);
+        if (stats.connections % 100 == 0)
+            udpsend(sock, addr, &stats, sizeof(stats));
     }
 }
 
@@ -95,21 +103,52 @@ int main(int argc, char *argv[]) {
     if(argc > 1)
         port = atoi(argv[1]);
 
-    ipaddr addr = iplocal(NULL, port, 0);
-    tcpsock ls = tcplisten(addr, 10);
+    ipaddr serv_addr = iplocal(NULL, port, 0);
+    tcpsock ls = tcplisten(serv_addr, 10);
     if(!ls) {
         perror("Can't open listening socket");
         return 1;
     }
 
-    chan ch = chmake(int, 0);
-    go(statistics(ch));
-
-    while(1) {
-        tcpsock as = tcpaccept(ls, -1);
-        if(!as)
-            continue;
-        go(dialogue(as, ch));
+    ipaddr stats_addr = iplocal(NULL, port + 1, 0);
+    udpsock ss = udplisten(stats_addr);
+    if(!ss) {
+        perror("Can't open stats socket");
+        return 1;
     }
+
+    for (int i = 0; i < 4; ++i) {
+        pid_t pid = fork();
+        assert(pid >= 0);
+
+        if (pid == 0) {
+            /* Child */
+            udpclose(ss);
+            chan ch = chmake(int, 100);
+            go(statistics(ch, stats_addr));
+
+            while(1) {
+                tcpsock as = tcpaccept(ls, -1);
+                if(!as)
+                    continue;
+                go(dialogue(as, ch));
+            }
+
+            _exit(1);
+        }
+    }
+
+    while (1) {
+        struct child_stats stats;
+        ipaddr addr;
+
+        ssize_t sz = udprecv(ss, &addr, &stats, sizeof(stats), -1);
+        assert(sz == sizeof(stats));
+
+        printf("process: %d connections: %d active: %d failed: %d\n",
+               stats.pid, stats.connections, stats.active, stats.failed);
+    }
+
+    return 0;
 }
 
